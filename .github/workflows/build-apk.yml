@@ -1,0 +1,97 @@
+
+name: Chit Zin APK Builder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package.json ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          else
+            ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname '*.zip' -print -quit || true)"
+            if [ -z "$ZIP_FILE" ]; then
+              echo "ERROR: Project ZIP not found!"
+              exit 1
+            fi
+            EXTRACT_DIR="$RUNNER_TEMP/extracted-project"
+            mkdir -p "$EXTRACT_DIR"
+            unzip -oq "$ZIP_FILE" -d "$EXTRACT_DIR"
+            PACKAGE_FILE="$(find "$EXTRACT_DIR" -type f -name package.json -print -quit || true)"
+            if [ -z "$PACKAGE_FILE" ]; then
+              echo "ERROR: package.json not found!"
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$PACKAGE_FILE")"
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install
+
+      - name: Build web app
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run build
+
+      - name: Add Android platform
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Configure Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python -m pip install --quiet pillow
+          python scripts/configure_android.py
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew clean assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chit-Zin-Premium-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
